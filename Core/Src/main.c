@@ -81,19 +81,22 @@ enum Mode {
 	MODE_MANUAL
 };
 
-typedef struct SysState {
+typedef struct SystemState {
 	// DHT11
 	float temperature;
 	uint8_t ir_state;
 	// fan
-	uint16_t fan__pwm;
+	uint16_t fan_pwm;
 	uint8_t fan_enable;
 	// mode
 	enum Mode mode;
 	// update
-	last_update_ms;
+	uint32_t last_update_ms;
 
-} SystemState;
+} SystemState_t;
+
+SystemState_t sys_state;
+
 
 uint32_t speed = SPEED_LOW;
 // IR sensor
