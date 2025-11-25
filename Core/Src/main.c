@@ -95,16 +95,20 @@ typedef struct SystemState {
 
 } SystemState_t;
 
-SystemState_t sys_state;
+SystemState_t sys_state = {
+    .temperature = 0,
+	.ir_state = 0,
+	.fan_pwm = SPEED_LOW,
+	.fan_enable = 0,
+	.mode = MODE_AUTO,
+	.last_update_ms = 0
+};
 
 
-uint32_t speed = SPEED_LOW;
 // IR sensor
 volatile uint32_t *irReg  = (uint32_t *)0x40020010;
 // DHT11
 uint32_t pMillis, cMillis;
-volatile float tCelsius = 0;
-
 // HC05
 uint8_t rxData;
 
@@ -202,21 +206,21 @@ void test(void *argument)
 }
 
 void change_speed() {
-	if (tCelsius >= 33)
-		speed = SPEED_HIGH;
-	else if (tCelsius >= 29)
-		speed = SPEED_MID;
-	else if (tCelsius >= 22)
-		speed = SPEED_LOW;
+
+	if (sys_state.temperature >= 33)
+		sys_state.fan_pwm = SPEED_HIGH;
+	else if (sys_state.temperature >= 29)
+		sys_state.fan_pwm = SPEED_MID;
 	else
-		speed = SPEED_LOW;
+		sys_state.fan_pwm = SPEED_LOW;
 }
 
 void OLED_task(void *pvParameters) {
+	// mutex?
 	for (;;) {
 		char t_c[20];
-		sprintf(t_c, "%.2f", tCelsius);
-		ssd1306_print(speed, t_c);
+		sprintf(t_c, "%.2f", sys_state.temperature);
+		ssd1306_print(sys_state.fan_pwm, t_c);
 		vTaskDelay(100);
 	}
 }
@@ -224,20 +228,19 @@ void OLED_task(void *pvParameters) {
 
 void DHT11_task(void *pvParameters) {
 	HAL_TIM_Base_Start(&htim1);
+
+	TickType_t lastWakeTime = xTaskGetTickCount();
+	const TickType_t period = pdMS_TO_TICKS(PERIOD_MS);
 	for (;;) {
-		static size_t next_ms = 0;
-		size_t ms = HAL_GetTick();
-		if (ms > next_ms) {
-		    next_ms = ms + PERIOD_MS;
-			float t;
-			// ssd1306_TestRectangle();
-			if (check_dht11(&t)) {
-			    tCelsius = t;
-			}
+
+		float t;
+		if (check_dht11(&t)) {
+			sys_state.temperature = t;
+		}
 //			if (mode == MODE_AUTO)
 //			    change_speed();
-		}
-		vTaskDelay(100);
+		// period wake up
+		vTaskDelayUntil(&lastWakeTime, period);
 	}
 }
 
@@ -316,7 +319,6 @@ int main(void)
   ssd1306_Init();
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3); //PB2 TIM2 CH3
   IR_Init();
-  // xTempQueue = xQueueCreate(1, sizeof(float));
   HAL_UART_Receive_IT(&huart3,&rxData,1);
   xTaskCreate(
  		      test,
@@ -339,7 +341,7 @@ int main(void)
 			  "dht11",
 			  256,
 			  NULL,
-			  1,
+			  3,
 			  NULL);
 
   xTaskCreate(
@@ -645,7 +647,7 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart->Instance == USART3) {
-		tCelsius = 7777;
+		sys_state.temperature = 7777;
 		HAL_UART_Receive_IT(&huart3, &rxData, 1);
 	}
 }
