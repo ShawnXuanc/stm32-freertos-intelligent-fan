@@ -38,7 +38,9 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  /home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/portable/ARM_CM4F/portmacro.h \
  /home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/include/mpu_wrappers.h \
  /home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/include/task.h \
- /home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/include/list.h
+ /home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/include/list.h \
+ /home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/include/queue.h \
+ /home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/include/task.h
 ../Core/Inc/main.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal.h:
 ../Core/Inc/stm32f4xx_hal_conf.h:
@@ -80,3 +82,5 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 /home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/include/mpu_wrappers.h:
 /home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/include/task.h:
 /home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/include/list.h:
+/home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/include/queue.h:
+/home/shawn/STM32CubeIDE/workspace_1.11.0/FreeRTOS_Fan/FreeRTOS/include/task.h:

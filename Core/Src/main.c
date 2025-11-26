@@ -25,6 +25,7 @@
 #include "ssd1306_tests.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,10 +44,8 @@
 
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
-
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
-
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
@@ -76,6 +75,8 @@ static void MX_USART3_UART_Init(void);
 #define DHT11_PIN GPIO_PIN_9
 #define PERIOD_MS 2000u
 
+#define Q_SIZE 128
+
 enum Mode {
 	MODE_AUTO,
 	MODE_MANUAL
@@ -104,6 +105,30 @@ SystemState_t sys_state = {
 	.last_update_ms = 0
 };
 
+typedef void (*bt_cmd_handler_t)(void);
+
+typedef struct {
+	char cmd;
+	bt_cmd_handler_t bt_handler;
+} bt_cmd_entry_t;
+
+void bt_handler_on();
+void bt_handler_off();
+void bt_handler_low();
+void bt_handler_mid();
+void bt_handler_high();
+
+static const bt_cmd_entry_t bt_cmd_table[] = {
+	{.cmd = 'O', .bt_handler = bt_handler_on},
+	{.cmd = 'F', .bt_handler = bt_handler_off},
+	{.cmd = '1', .bt_handler = bt_handler_low},
+	{.cmd = '2', .bt_handler = bt_handler_mid},
+	{.cmd = '3', .bt_handler = bt_handler_high}
+};
+
+#define BT_CMD_TABLE_SIZE (sizeof(bt_cmd_table) / sizeof(bt_cmd_table[0]))
+
+QueueHandle_t btQueue;
 
 // IR sensor
 volatile uint32_t *irReg  = (uint32_t *)0x40020010;
@@ -111,6 +136,36 @@ volatile uint32_t *irReg  = (uint32_t *)0x40020010;
 uint32_t pMillis, cMillis;
 // HC05
 uint8_t rxData;
+
+
+void bt_handler_on() {
+	sys_state.fan_enable = 1;
+	sys_state.fan_pwm = SPEED_LOW;
+	sys_state.mode = MODE_MANUAL;
+}
+
+void bt_handler_off() {
+	sys_state.fan_enable = 0;
+	sys_state.mode = MODE_AUTO;
+}
+
+void bt_handler_low() {
+	sys_state.fan_enable = 1;
+	sys_state.fan_pwm = SPEED_LOW;
+	sys_state.mode = MODE_MANUAL;
+}
+
+void bt_handler_mid() {
+	sys_state.fan_enable = 1;
+	sys_state.fan_pwm = SPEED_MID;
+	sys_state.mode = MODE_MANUAL;
+}
+
+void bt_handler_high() {
+	sys_state.fan_enable = 1;
+	sys_state.fan_pwm = SPEED_HIGH;
+	sys_state.mode = MODE_MANUAL;
+}
 
 
 void microDelay(uint16_t delay) {
@@ -236,9 +291,9 @@ void DHT11_task(void *pvParameters) {
 		float t;
 		if (check_dht11(&t)) {
 			sys_state.temperature = t;
+			sys_state.last_update_ms = HAL_GetTick();
 		}
-//			if (mode == MODE_AUTO)
-//			    change_speed();
+
 		// period wake up
 		vTaskDelayUntil(&lastWakeTime, period);
 	}
@@ -247,7 +302,7 @@ void DHT11_task(void *pvParameters) {
 void turn_on_PWM() {
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 0);
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, 1);
-	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_3, 1600);
+	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_3, sys_state.fan_pwm);
 }
 
 void turn_off_PWM() {
@@ -268,16 +323,45 @@ void IR_Init() {
 
 }
 
+uint8_t IR_read_reg() {
+	return (*irReg & 1) == 0 ? 1 : 0;
+}
+
 void FanControl_task(void *pvParameters) {
 	for (;;) {
-		if ((*irReg & 1) == 0) {
+		sys_state.ir_state = IR_read_reg();
+
+		if (sys_state.mode == MODE_AUTO) {
+			if (sys_state.ir_state) {
+				sys_state.fan_enable = 1;
+			} else {
+				sys_state.fan_enable = 0;
+			}
+		}
+
+		if (sys_state.fan_enable) {
 			turn_on_PWM();
 		} else {
 			turn_off_PWM();
 		}
-		// 會因為 fanControl 沒有讓出 cpu 所以讀不到 dht11
+
 		vTaskDelay(100);
 	}
+}
+
+void BtRecieve_task(void *pvParameters) {
+	for (;;) {
+		// Block until the data is received in the　queue
+		if (xQueueReceive(btQueue, &rxData, portMAX_DELAY) == pdPASS) {
+			for (int i = 0; i < BT_CMD_TABLE_SIZE; ++i) {
+				if (rxData == bt_cmd_table[i].cmd) {
+					bt_cmd_table[i].bt_handler();
+					break;
+				}
+			}
+		}
+	}
+
 }
 
 
@@ -319,6 +403,7 @@ int main(void)
   ssd1306_Init();
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3); //PB2 TIM2 CH3
   IR_Init();
+  btQueue = xQueueCreate(Q_SIZE, sizeof(uint8_t));
   HAL_UART_Receive_IT(&huart3,&rxData,1);
   xTaskCreate(
  		      test,
@@ -341,7 +426,7 @@ int main(void)
 			  "dht11",
 			  256,
 			  NULL,
-			  3,
+			  2,
 			  NULL);
 
   xTaskCreate(
@@ -350,6 +435,14 @@ int main(void)
   			  256,
   			  NULL,
   			  1,
+  			  NULL);
+
+  xTaskCreate(
+		  	  BtRecieve_task,
+  			  "bt",
+  			  128,
+  			  NULL,
+  			  3,
   			  NULL);
 
   vTaskStartScheduler();
@@ -647,8 +740,16 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart->Instance == USART3) {
-		sys_state.temperature = 7777;
+		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+		xQueueSendFromISR(btQueue, &rxData, &xHigherPriorityTaskWoken);
+
+		// Restart the UART receive interrupt
 		HAL_UART_Receive_IT(&huart3, &rxData, 1);
+
+		// If a higher priority task was unblocked by xQueueSendFromISR
+		// request an immediate context switch before exiting the ISR
+		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 	}
 }
 
