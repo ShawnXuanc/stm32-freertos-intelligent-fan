@@ -358,15 +358,15 @@ void FanControl_task(void *pvParameters) {
 void BtRecieve_task(void *pvParameters) {
 	for (;;) {
 		// Block until the data is received in the　queue
-		if (xQueueReceive(btQueue, &rxData, portMAX_DELAY) == pdPASS) {
+		char cmd;
+		if (xQueueReceive(btQueue, &cmd, portMAX_DELAY) == pdPASS) {
 			for (int i = 0; i < BT_CMD_TABLE_SIZE; ++i) {
-				if (rxData == bt_cmd_table[i].cmd) {
+				if (cmd == bt_cmd_table[i].cmd) {
 					bt_cmd_table[i].bt_handler();
 					break;
 				}
 			}
 		}
-		vTaskDelay(100);
 	}
 
 }
