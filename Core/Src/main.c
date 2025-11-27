@@ -26,6 +26,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "state.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -44,8 +45,10 @@
 
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
+
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
+
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
@@ -77,10 +80,10 @@ static void MX_USART3_UART_Init(void);
 
 #define Q_SIZE 128
 
-enum Mode {
-	MODE_AUTO,
-	MODE_MANUAL
-};
+//enum Mode {
+//	MODE_AUTO,
+//	MODE_MANUAL
+//};
 
 typedef struct SystemState {
 	// DHT11
@@ -262,9 +265,9 @@ void test(void *argument)
 
 void change_speed() {
 
-	if (sys_state.temperature >= 33)
+	if (sys_state.temperature >= 30)
 		sys_state.fan_pwm = SPEED_HIGH;
-	else if (sys_state.temperature >= 29)
+	else if (sys_state.temperature >= 28)
 		sys_state.fan_pwm = SPEED_MID;
 	else
 		sys_state.fan_pwm = SPEED_LOW;
@@ -275,7 +278,7 @@ void OLED_task(void *pvParameters) {
 	for (;;) {
 		char t_c[20];
 		sprintf(t_c, "%.2f", sys_state.temperature);
-		ssd1306_print(sys_state.fan_pwm, t_c);
+		ssd1306_print(sys_state.fan_pwm, t_c, sys_state.mode);
 		vTaskDelay(100);
 	}
 }
@@ -334,9 +337,11 @@ void FanControl_task(void *pvParameters) {
 		if (sys_state.mode == MODE_AUTO) {
 			if (sys_state.ir_state) {
 				sys_state.fan_enable = 1;
+				change_speed();
 			} else {
 				sys_state.fan_enable = 0;
 			}
+
 		}
 
 		if (sys_state.fan_enable) {
@@ -344,6 +349,7 @@ void FanControl_task(void *pvParameters) {
 		} else {
 			turn_off_PWM();
 		}
+
 
 		vTaskDelay(100);
 	}
@@ -360,6 +366,7 @@ void BtRecieve_task(void *pvParameters) {
 				}
 			}
 		}
+		vTaskDelay(100);
 	}
 
 }
@@ -393,6 +400,7 @@ int main(void)
   /* USER CODE BEGIN SysInit */
 
   /* USER CODE END SysInit */
+
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
@@ -426,7 +434,7 @@ int main(void)
 			  "dht11",
 			  256,
 			  NULL,
-			  2,
+			  1,
 			  NULL);
 
   xTaskCreate(
@@ -442,7 +450,7 @@ int main(void)
   			  "bt",
   			  128,
   			  NULL,
-  			  3,
+  			  1,
   			  NULL);
 
   vTaskStartScheduler();
@@ -741,8 +749,8 @@ static void MX_GPIO_Init(void)
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart->Instance == USART3) {
 		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
-		xQueueSendFromISR(btQueue, &rxData, &xHigherPriorityTaskWoken);
+		uint8_t c = rxData;
+		xQueueSendFromISR(btQueue, &c, &xHigherPriorityTaskWoken);
 
 		// Restart the UART receive interrupt
 		HAL_UART_Receive_IT(&huart3, &rxData, 1);
@@ -750,6 +758,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 		// If a higher priority task was unblocked by xQueueSendFromISR
 		// request an immediate context switch before exiting the ISR
 		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+
 	}
 }
 

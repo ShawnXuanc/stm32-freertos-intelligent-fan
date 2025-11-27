@@ -2,7 +2,7 @@
 #define __SSD1306_TEST_H__
 
 #include <_ansi.h>
-
+#include "state.h"
 _BEGIN_STD_C
 
 void ssd1306_TestBorder(void);
@@ -18,7 +18,7 @@ void ssd1306_TestCircle(void);
 void ssd1306_TestArc(void);
 void ssd1306_TestPolyline(void);
 void ssd1306_TestDrawBitmap(void);
-void ssd1306_print(int, char *);
+void ssd1306_print(int, char *, enum Mode);
 
 _END_STD_C
 
