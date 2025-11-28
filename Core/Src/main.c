@@ -27,6 +27,8 @@
 #include "task.h"
 #include "queue.h"
 #include "state.h"
+#include "semphr.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -80,21 +82,12 @@ static void MX_USART3_UART_Init(void);
 
 #define Q_SIZE 128
 
-//enum Mode {
-//	MODE_AUTO,
-//	MODE_MANUAL
-//};
-
 typedef struct SystemState {
-	// DHT11
 	float temperature;
 	uint8_t ir_state;
-	// fan
 	uint16_t fan_pwm;
 	uint8_t fan_enable;
-	// mode
 	enum Mode mode;
-	// update
 	uint32_t last_update_ms;
 
 } SystemState_t;
@@ -108,18 +101,21 @@ SystemState_t sys_state = {
 	.last_update_ms = 0
 };
 
-typedef void (*bt_cmd_handler_t)(void);
+typedef void (*bt_cmd_handler_t)(SystemState_t *sys);
 
 typedef struct {
 	char cmd;
 	bt_cmd_handler_t bt_handler;
 } bt_cmd_entry_t;
 
-void bt_handler_on();
-void bt_handler_off();
-void bt_handler_low();
-void bt_handler_mid();
-void bt_handler_high();
+void bt_handler_on(SystemState_t *sys);
+void bt_handler_off(SystemState_t *sys);
+void bt_handler_low(SystemState_t *sys);
+void bt_handler_mid(SystemState_t *sys);
+void bt_handler_high(SystemState_t *sys);
+
+// include priority inheritance
+SemaphoreHandle_t state_mutex;
 
 static const bt_cmd_entry_t bt_cmd_table[] = {
 	{.cmd = 'O', .bt_handler = bt_handler_on},
@@ -140,34 +136,32 @@ uint32_t pMillis, cMillis;
 // HC05
 uint8_t rxData;
 
-
-void bt_handler_on() {
-	sys_state.fan_enable = 1;
-	sys_state.fan_pwm = SPEED_LOW;
-	sys_state.mode = MODE_MANUAL;
+static void bt_set_fan_state(SystemState_t *sys, uint8_t enable, uint16_t pwm, enum Mode mode)
+{
+	sys->fan_enable = enable;
+	sys->fan_pwm    = pwm;
+	sys->mode       = mode;
 }
 
-void bt_handler_off() {
-	sys_state.fan_enable = 0;
-	sys_state.mode = MODE_AUTO;
+// same logic as Low for now. Intended to be changed.
+void bt_handler_on(SystemState_t *sys) {
+	bt_set_fan_state(sys, 1, SPEED_LOW, MODE_MANUAL);
 }
 
-void bt_handler_low() {
-	sys_state.fan_enable = 1;
-	sys_state.fan_pwm = SPEED_LOW;
-	sys_state.mode = MODE_MANUAL;
+void bt_handler_off(SystemState_t *sys) {
+	bt_set_fan_state(sys, 0, SPEED_LOW, MODE_AUTO);
 }
 
-void bt_handler_mid() {
-	sys_state.fan_enable = 1;
-	sys_state.fan_pwm = SPEED_MID;
-	sys_state.mode = MODE_MANUAL;
+void bt_handler_low(SystemState_t *sys) {
+	bt_set_fan_state(sys, 1, SPEED_LOW, MODE_MANUAL);
 }
 
-void bt_handler_high() {
-	sys_state.fan_enable = 1;
-	sys_state.fan_pwm = SPEED_HIGH;
-	sys_state.mode = MODE_MANUAL;
+void bt_handler_mid(SystemState_t *sys) {
+	bt_set_fan_state(sys, 1, SPEED_MID, MODE_MANUAL);
+}
+
+void bt_handler_high(SystemState_t *sys) {
+	bt_set_fan_state(sys, 1, SPEED_HIGH, MODE_MANUAL);
 }
 
 
@@ -263,49 +257,57 @@ void test(void *argument)
 		}
 }
 
-void change_speed() {
-
-	if (sys_state.temperature >= 30)
-		sys_state.fan_pwm = SPEED_HIGH;
-	else if (sys_state.temperature >= 28)
-		sys_state.fan_pwm = SPEED_MID;
-	else
-		sys_state.fan_pwm = SPEED_LOW;
-}
 
 void OLED_task(void *pvParameters) {
-	// mutex?
+    SystemState_t *sys = &sys_state;
+
+    float prev_temp = 0.0f;
+	uint16_t prev_pwm = SPEED_LOW;
+	enum Mode prev_mode = MODE_AUTO;
+
 	for (;;) {
-		char t_c[20];
-		sprintf(t_c, "%.2f", sys_state.temperature);
-		ssd1306_print(sys_state.fan_pwm, t_c, sys_state.mode);
+		//  Non-blocking take. If mutex is busy, keep using previous cached values.
+		if (xSemaphoreTake(state_mutex, 0) == pdTRUE) {
+			prev_temp = sys->temperature;
+			prev_pwm = sys->fan_pwm;
+			prev_mode = sys->mode;
+			xSemaphoreGive(state_mutex);
+		}
+		char temp_str[20];
+		sprintf(temp_str, "%.2f", prev_temp);
+		ssd1306_print(prev_pwm, temp_str, prev_mode);
 		vTaskDelay(100);
 	}
 }
 
 
 void DHT11_task(void *pvParameters) {
+	SystemState_t *sys = &sys_state;
+
 	HAL_TIM_Base_Start(&htim1);
 
 	TickType_t lastWakeTime = xTaskGetTickCount();
 	const TickType_t period = pdMS_TO_TICKS(PERIOD_MS);
+
 	for (;;) {
 
-		float t;
-		if (check_dht11(&t)) {
-			sys_state.temperature = t;
-			sys_state.last_update_ms = HAL_GetTick();
+		float temp;
+		if (check_dht11(&temp)) {
+			if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
+				sys->temperature = temp;
+				sys->last_update_ms = HAL_GetTick();
+				xSemaphoreGive(state_mutex);
+			}
 		}
-
 		// period wake up
 		vTaskDelayUntil(&lastWakeTime, period);
 	}
 }
 
-void turn_on_PWM() {
+void turn_on_PWM(uint16_t pwm) {
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 0);
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, 1);
-	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_3, sys_state.fan_pwm);
+	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_3, pwm);
 }
 
 void turn_off_PWM() {
@@ -330,22 +332,44 @@ uint8_t IR_read_reg() {
 	return (*irReg & 1) == 0 ? 1 : 0;
 }
 
-void FanControl_task(void *pvParameters) {
-	for (;;) {
-		sys_state.ir_state = IR_read_reg();
+void change_fan_state(SystemState_t *sys) {
+	if (sys->mode == MODE_AUTO) {
+		if (sys->ir_state) {
+			sys->fan_enable = 1;
 
-		if (sys_state.mode == MODE_AUTO) {
-			if (sys_state.ir_state) {
-				sys_state.fan_enable = 1;
-				change_speed();
-			} else {
-				sys_state.fan_enable = 0;
-			}
+			if (sys->temperature >= 30)
+				sys->fan_pwm = SPEED_HIGH;
+			else if (sys->temperature >= 28)
+				sys->fan_pwm = SPEED_MID;
+			else
+				sys->fan_pwm = SPEED_LOW;
 
+		} else {
+			sys->fan_enable = 0;
 		}
 
-		if (sys_state.fan_enable) {
-			turn_on_PWM();
+	}
+}
+
+
+void FanControl_task(void *pvParameters) {
+	SystemState_t *sys = &sys_state;
+
+	for (;;) {
+		uint8_t fan_enable;
+		uint16_t pwm;
+		if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
+			sys->ir_state = IR_read_reg();
+
+			change_fan_state(sys);
+			fan_enable = sys->fan_enable;
+			pwm = sys->fan_pwm;
+			xSemaphoreGive(state_mutex);
+		}
+
+
+		if (fan_enable) {
+			turn_on_PWM(pwm);
 		} else {
 			turn_off_PWM();
 		}
@@ -353,22 +377,27 @@ void FanControl_task(void *pvParameters) {
 
 		vTaskDelay(100);
 	}
+
 }
 
 void BtRecieve_task(void *pvParameters) {
+	SystemState_t *sys = &sys_state;
 	for (;;) {
 		// Block until the data is received in the　queue
 		char cmd;
 		if (xQueueReceive(btQueue, &cmd, portMAX_DELAY) == pdPASS) {
 			for (int i = 0; i < BT_CMD_TABLE_SIZE; ++i) {
 				if (cmd == bt_cmd_table[i].cmd) {
-					bt_cmd_table[i].bt_handler();
+					if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
+						bt_cmd_table[i].bt_handler(sys);
+						xSemaphoreGive(state_mutex);
+					}
 					break;
 				}
 			}
+
 		}
 	}
-
 }
 
 
@@ -412,6 +441,7 @@ int main(void)
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3); //PB2 TIM2 CH3
   IR_Init();
   btQueue = xQueueCreate(Q_SIZE, sizeof(uint8_t));
+  state_mutex = xSemaphoreCreateMutex();
   HAL_UART_Receive_IT(&huart3,&rxData,1);
   xTaskCreate(
  		      test,
