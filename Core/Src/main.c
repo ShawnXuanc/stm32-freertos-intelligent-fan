@@ -22,12 +22,15 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include "ssd1306.h"
 #include "ssd1306_tests.h"
+#include "ssd1306_fonts.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
 #include "state.h"
 #include "semphr.h"
+#include "string.h"
 
 /* USER CODE END Includes */
 
@@ -104,7 +107,7 @@ SystemState_t sys_state = {
 typedef void (*bt_cmd_handler_t)(SystemState_t *sys);
 
 typedef struct {
-	char cmd;
+	char *cmd;
 	bt_cmd_handler_t bt_handler;
 } bt_cmd_entry_t;
 
@@ -118,11 +121,11 @@ void bt_handler_high(SystemState_t *sys);
 SemaphoreHandle_t state_mutex;
 
 static const bt_cmd_entry_t bt_cmd_table[] = {
-	{.cmd = 'O', .bt_handler = bt_handler_on},
-	{.cmd = 'F', .bt_handler = bt_handler_off},
-	{.cmd = '1', .bt_handler = bt_handler_low},
-	{.cmd = '2', .bt_handler = bt_handler_mid},
-	{.cmd = '3', .bt_handler = bt_handler_high}
+	{.cmd = "on", .bt_handler = bt_handler_on},
+	{.cmd = "off", .bt_handler = bt_handler_off},
+	{.cmd = "low", .bt_handler = bt_handler_low},
+	{.cmd = "mid", .bt_handler = bt_handler_mid},
+	{.cmd = "high", .bt_handler = bt_handler_high}
 };
 
 #define BT_CMD_TABLE_SIZE (sizeof(bt_cmd_table) / sizeof(bt_cmd_table[0]))
@@ -380,27 +383,42 @@ void FanControl_task(void *pvParameters) {
 
 }
 
-void BtRecieve_task(void *pvParameters) {
-	SystemState_t *sys = &sys_state;
-	for (;;) {
-		// Block until the data is received in the　queue
-		char cmd;
-		if (xQueueReceive(btQueue, &cmd, portMAX_DELAY) == pdPASS) {
-			for (int i = 0; i < BT_CMD_TABLE_SIZE; ++i) {
-				if (cmd == bt_cmd_table[i].cmd) {
-					if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
-						bt_cmd_table[i].bt_handler(sys);
-						xSemaphoreGive(state_mutex);
-					}
-					break;
-				}
+void bt_process_string(SystemState_t *sys, const char *str) {
+	for (int i = 0; i < BT_CMD_TABLE_SIZE; ++i) {
+		if (!strcmp(str, bt_cmd_table[i].cmd)) {
+			if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
+				bt_cmd_table[i].bt_handler(sys);
+				xSemaphoreGive(state_mutex);
 			}
-
+			break;
 		}
 	}
 }
 
-
+void BtRecieve_task(void *pvParameters) {
+	SystemState_t *sys = &sys_state;
+	char str[20];
+	int cur = 0;
+	for (;;) {
+		// Block until the data is received in the　queue
+		char cmd;
+		if (xQueueReceive(btQueue, &cmd, portMAX_DELAY) == pdPASS) {
+			if (cmd == '\r')
+				continue;
+			if (cmd == '\n') {
+				str[cur] = '\0';
+				bt_process_string(sys, str);
+				cur = 0;
+			} else {
+				if (cur >= sizeof(str) - 1) {
+					cur = 0;
+					continue;
+				}
+				str[cur++] = cmd;
+			}
+		}
+	}
+}
 
 /* USER CODE END 0 */
 

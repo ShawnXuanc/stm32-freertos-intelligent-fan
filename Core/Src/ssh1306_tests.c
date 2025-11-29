@@ -242,11 +242,11 @@ void ssd1306_print(int num, char *c, enum Mode m)
 	ssd1306_WriteString(t1, Font_6x8, White);
 	ssd1306_SetCursor(4, 34);
 	ssd1306_WriteString("temperature: ", Font_6x8, White);
-	ssd1306_SetCursor(4, 44);
 	ssd1306_WriteString(c, Font_6x8, White);
 
 	ssd1306_UpdateScreen();
 }
+
 
 void ssd1306_TestFPS() {
     ssd1306_Fill(White);
