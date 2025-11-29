@@ -76,7 +76,7 @@ static void MX_USART3_UART_Init(void);
 
 #define SPEED_LOW 800
 #define SPEED_MID 1450
-#define SPEED_HIGH 2000
+#define SPEED_HIGH 1999
 
 #define DHT11_PORT GPIOB
 // PB9
@@ -104,29 +104,22 @@ SystemState_t sys_state = {
 	.last_update_ms = 0
 };
 
-typedef void (*bt_cmd_handler_t)(SystemState_t *sys);
+typedef struct {
+	SystemState_t *sys;
+	int set_pwm;
+	int set_temp;
+} bt_cmd_context_t ;
+
+typedef void (*bt_cmd_handler_t)(bt_cmd_context_t *bct);
 
 typedef struct {
 	char *cmd;
 	bt_cmd_handler_t bt_handler;
 } bt_cmd_entry_t;
 
-void bt_handler_on(SystemState_t *sys);
-void bt_handler_off(SystemState_t *sys);
-void bt_handler_low(SystemState_t *sys);
-void bt_handler_mid(SystemState_t *sys);
-void bt_handler_high(SystemState_t *sys);
 
 // include priority inheritance
 SemaphoreHandle_t state_mutex;
-
-static const bt_cmd_entry_t bt_cmd_table[] = {
-	{.cmd = "on", .bt_handler = bt_handler_on},
-	{.cmd = "off", .bt_handler = bt_handler_off},
-	{.cmd = "low", .bt_handler = bt_handler_low},
-	{.cmd = "mid", .bt_handler = bt_handler_mid},
-	{.cmd = "high", .bt_handler = bt_handler_high}
-};
 
 #define BT_CMD_TABLE_SIZE (sizeof(bt_cmd_table) / sizeof(bt_cmd_table[0]))
 
@@ -139,33 +132,39 @@ uint32_t pMillis, cMillis;
 // HC05
 uint8_t rxData;
 
-static void bt_set_fan_state(SystemState_t *sys, uint8_t enable, uint16_t pwm, enum Mode mode)
+void bt_set_fan_state(SystemState_t *sys, uint8_t enable, uint16_t pwm, enum Mode mode)
 {
 	sys->fan_enable = enable;
 	sys->fan_pwm    = pwm;
 	sys->mode       = mode;
 }
 
-// same logic as Low for now. Intended to be changed.
-void bt_handler_on(SystemState_t *sys) {
-	bt_set_fan_state(sys, 1, SPEED_LOW, MODE_MANUAL);
+#define BT_CMD_MODE(name, enable, pwm, mode) \
+	void bt_handler_##name(bt_cmd_context_t *bct) { \
+	    bt_set_fan_state(bct->sys, enable, pwm, mode); \
+	}
+
+BT_CMD_MODE(on, 1, SPEED_LOW, MODE_MANUAL)
+BT_CMD_MODE(off, 0, SPEED_LOW, MODE_AUTO)
+BT_CMD_MODE(low, 1, SPEED_LOW, MODE_MANUAL)
+BT_CMD_MODE(mid, 1, SPEED_MID, MODE_MANUAL)
+BT_CMD_MODE(high, 1, SPEED_HIGH, MODE_MANUAL)
+
+void bt_handler_set_pwm(bt_cmd_context_t *bct) {
+	int pwm = bct->set_pwm;
+	if (pwm < 0 || pwm > 2000)
+	    pwm = 0;
+	bt_set_fan_state(bct->sys, 1, pwm, MODE_MANUAL);
 }
 
-void bt_handler_off(SystemState_t *sys) {
-	bt_set_fan_state(sys, 0, SPEED_LOW, MODE_AUTO);
-}
-
-void bt_handler_low(SystemState_t *sys) {
-	bt_set_fan_state(sys, 1, SPEED_LOW, MODE_MANUAL);
-}
-
-void bt_handler_mid(SystemState_t *sys) {
-	bt_set_fan_state(sys, 1, SPEED_MID, MODE_MANUAL);
-}
-
-void bt_handler_high(SystemState_t *sys) {
-	bt_set_fan_state(sys, 1, SPEED_HIGH, MODE_MANUAL);
-}
+static const bt_cmd_entry_t bt_cmd_table[] = {
+	{.cmd = "on", .bt_handler = bt_handler_on},
+	{.cmd = "off", .bt_handler = bt_handler_off},
+	{.cmd = "low", .bt_handler = bt_handler_low},
+	{.cmd = "mid", .bt_handler = bt_handler_mid},
+	{.cmd = "high", .bt_handler = bt_handler_high},
+	{.cmd = "pwm", .bt_handler = bt_handler_set_pwm}
+};
 
 
 void microDelay(uint16_t delay) {
@@ -383,11 +382,60 @@ void FanControl_task(void *pvParameters) {
 
 }
 
-void bt_process_string(SystemState_t *sys, const char *str) {
+int s_to_int(char *str) {
+	int num = 0;
+	while (*str) {
+		if (*str < '0' || *str > '9')
+			return -1;
+		num = num * 10  + (*str - '0');
+		str++;
+	}
+	return num;
+}
+
+void bt_process_string(SystemState_t *sys, char *str) {
+	char *cur = str;
+	while (*cur) {
+		if (*cur >= 'A' && *cur <= 'Z') {
+			*cur = (*cur - 'A' + 'a');
+		}
+		cur++;
+	}
+
+	char *num = NULL;
+	cur = str;
+	while (*cur && *cur != ' ') {
+		cur++;
+	}
+
+	if (*cur  == ' ') {
+		*cur = '\0';
+		cur++;
+		while (*cur == ' ') {
+			cur++;
+		}
+		if (*cur != '\0')
+			num = cur;
+	}
+
+	int pwm_ = 0;
+	if (num != NULL) {
+		int tmp = s_to_int(num);
+		if (tmp > 0)
+			pwm_ = tmp;
+	}
+
+
+	 bt_cmd_context_t bct = {
+	     .sys      = sys,
+		 .set_pwm  = pwm_,
+		 .set_temp = 0,
+	  };
+
 	for (int i = 0; i < BT_CMD_TABLE_SIZE; ++i) {
 		if (!strcmp(str, bt_cmd_table[i].cmd)) {
 			if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
-				bt_cmd_table[i].bt_handler(sys);
+				bt_cmd_table[i].bt_handler(&bct);
 				xSemaphoreGive(state_mutex);
 			}
 			break;

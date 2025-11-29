@@ -247,6 +247,13 @@ void ssd1306_print(int num, char *c, enum Mode m)
 	ssd1306_UpdateScreen();
 }
 
+void screen_test(char *num) {
+	ssd1306_Fill(Black);
+	ssd1306_SetCursor(4, 4);
+	ssd1306_WriteString(num, Font_6x8, White);
+	ssd1306_SetCursor(4, 14);
+	ssd1306_UpdateScreen();
+}
 
 void ssd1306_TestFPS() {
     ssd1306_Fill(White);
