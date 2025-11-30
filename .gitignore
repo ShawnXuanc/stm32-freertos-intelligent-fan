@@ -1,0 +1,15 @@
+# Build output directories
+Debug/
+build/
+out/
+
+# Object files and intermediate compiler output
+*.o
+*.d
+*.su
+*.elf
+*.map
+*.list
+
+*.log
+*.tmp

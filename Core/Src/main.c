@@ -355,16 +355,16 @@ static uint16_t cal_pwm_by_temp(float temp)
     return SPEED_LOW;
 }
 
-void change_fan_state_auto(SystemState_t *sys, uint8_t ir_, float temp) {
-	if (sys->mode != MODE_AUTO)
+void change_fan_state_auto(uint8_t ir_, float temp, enum Mode mode, uint8_t *fan_enable, uint16_t *pwm) {
+	if (mode != MODE_AUTO)
 		return ;
 
-	sys->fan_enable = ir_ ? 1 : 0;
+	*fan_enable = ir_ ? 1 : 0;
 
-	if (!sys->fan_enable)
+	if (!*fan_enable)
 		return ;
 
-	sys->fan_pwm = cal_pwm_by_temp(temp);
+	*pwm = cal_pwm_by_temp(temp);
 }
 
 void FanControl_task(void *pvParameters) {
@@ -375,16 +375,28 @@ void FanControl_task(void *pvParameters) {
 		uint16_t pwm;
 		uint8_t ir_;
 		float temp;
-
+		enum Mode mode;
 		if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
 			ir_ = sys->ir_state;
 			temp = sys->temperature;
+			fan_enable = sys->fan_enable;
+			pwm = sys->fan_pwm;
+			mode = sys->mode;
+			xSemaphoreGive(state_mutex);
+		}
 
-			change_fan_state_auto(sys, ir_, temp);
+		change_fan_state_auto(ir_, temp, mode, &fan_enable, &pwm);
+
+		if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
+			// Apply auto result only if mode is still AUTO,
+			// ensuring MANUAL updates take priority
+			if (sys->mode == MODE_AUTO) {
+				sys->fan_enable = fan_enable;
+				sys->fan_pwm = pwm;
+			}
 
 			fan_enable = sys->fan_enable;
 			pwm = sys->fan_pwm;
-
 			xSemaphoreGive(state_mutex);
 		}
 
@@ -394,7 +406,6 @@ void FanControl_task(void *pvParameters) {
 		} else {
 			turn_off_PWM();
 		}
-
 
 		vTaskDelay(100);
 	}
