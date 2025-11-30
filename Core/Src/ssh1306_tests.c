@@ -216,33 +216,30 @@ void ssd1306_TestFonts3() {
 
 
 
-void ssd1306_print(int num, char *c, enum Mode m)
+void ssd1306_print(int num, char *temp_str, enum Mode m)
 {
-	char t1[30], t2[30];
+	const char *speed_str;
 	if (num < 1000)
-		strcpy(t1, "low");
-	else if (num >= 1000 && num < 1500)
-		strcpy(t1, "mid");
-	else if (num >= 1500)
-		strcpy(t1, "high");
-
-	if (m == MODE_MANUAL)
-		strcpy(t2, "MANUAL");
+		speed_str = "LOW";
+	else if (num < 1500)
+		speed_str = "MID";
 	else
-		strcpy(t2, "AUTO");
+		speed_str = "HIGH";
+
+	const char *mode_str = (m == MODE_MANUAL) ? "MANUAL" : "AUTO";
 
 	ssd1306_Fill(Black);
 	ssd1306_SetCursor(4, 4);
 	// ssd1306_WriteString("PHlab embedded proj", Font_6x8, White);
 	ssd1306_WriteString("System Mode: ", Font_6x8, White);
-	ssd1306_WriteString(t2, Font_6x8, White);
+	ssd1306_WriteString(mode_str, Font_6x8, White);
 	ssd1306_SetCursor(4, 14);
 	ssd1306_WriteString("speed: ", Font_6x8, White);
 	ssd1306_SetCursor(4, 24);
-	ssd1306_WriteString(t1, Font_6x8, White);
+	ssd1306_WriteString(speed_str, Font_6x8, White);
 	ssd1306_SetCursor(4, 34);
 	ssd1306_WriteString("temperature: ", Font_6x8, White);
-	ssd1306_WriteString(c, Font_6x8, White);
+	ssd1306_WriteString(temp_str, Font_6x8, White);
 
 	ssd1306_UpdateScreen();
 }

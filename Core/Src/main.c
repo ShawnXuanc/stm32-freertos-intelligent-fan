@@ -183,7 +183,6 @@ uint8_t DHT11_Start(void) {
   HAL_GPIO_Init(DHT11_PORT, &GPIO_InitStructPrivate); // set the pin as output
   HAL_GPIO_WritePin(DHT11_PORT, DHT11_PIN, 0);        // pull the pin low
   HAL_Delay(20);                                      // wait for 20ms
-  // vTaskDelay(20);
   HAL_GPIO_WritePin(DHT11_PORT, DHT11_PIN, 1);        // pull the pin high
   microDelay(30);                                     // wait for 30us
   GPIO_InitStructPrivate.Mode = GPIO_MODE_INPUT;
@@ -191,8 +190,8 @@ uint8_t DHT11_Start(void) {
   HAL_GPIO_Init(DHT11_PORT, &GPIO_InitStructPrivate); // set the pin as input
   microDelay(40);
   if (!(HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN))) {
-    microDelay(80);
-    if ((HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN)))
+	  microDelay(80);
+	  if ((HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN)))
       Response = 1;
   }
   pMillis = HAL_GetTick();
@@ -330,29 +329,43 @@ void IR_Init() {
 
 }
 
-uint8_t IR_read_reg() {
+uint8_t ir_read_reg() {
 	return (*irReg & 1) == 0 ? 1 : 0;
 }
 
-void change_fan_state(SystemState_t *sys) {
-	if (sys->mode == MODE_AUTO) {
-		if (sys->ir_state) {
-			sys->fan_enable = 1;
 
-			if (sys->temperature >= 30)
-				sys->fan_pwm = SPEED_HIGH;
-			else if (sys->temperature >= 28)
-				sys->fan_pwm = SPEED_MID;
-			else
-				sys->fan_pwm = SPEED_LOW;
+void IR_task(void *pvParameters) {
+	SystemState_t *sys = &sys_state;
 
-		} else {
-			sys->fan_enable = 0;
+	for (;;) {
+		uint8_t ir_ = ir_read_reg();
+		if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE){
+			sys->ir_state = ir_;
+			xSemaphoreGive(state_mutex);
 		}
-
+		vTaskDelay(100);
 	}
+
 }
 
+static uint16_t cal_pwm_by_temp(float temp)
+{
+    if (temp >= 30)  return SPEED_HIGH;
+    if (temp >= 28)  return SPEED_MID;
+    return SPEED_LOW;
+}
+
+void change_fan_state_auto(SystemState_t *sys, uint8_t ir_, float temp) {
+	if (sys->mode != MODE_AUTO)
+		return ;
+
+	sys->fan_enable = ir_ ? 1 : 0;
+
+	if (!sys->fan_enable)
+		return ;
+
+	sys->fan_pwm = cal_pwm_by_temp(temp);
+}
 
 void FanControl_task(void *pvParameters) {
 	SystemState_t *sys = &sys_state;
@@ -360,12 +373,18 @@ void FanControl_task(void *pvParameters) {
 	for (;;) {
 		uint8_t fan_enable;
 		uint16_t pwm;
-		if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
-			sys->ir_state = IR_read_reg();
+		uint8_t ir_;
+		float temp;
 
-			change_fan_state(sys);
+		if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
+			ir_ = sys->ir_state;
+			temp = sys->temperature;
+
+			change_fan_state_auto(sys, ir_, temp);
+
 			fan_enable = sys->fan_enable;
 			pwm = sys->fan_pwm;
+
 			xSemaphoreGive(state_mutex);
 		}
 
@@ -379,7 +398,6 @@ void FanControl_task(void *pvParameters) {
 
 		vTaskDelay(100);
 	}
-
 }
 
 int s_to_int(char *str) {
@@ -546,8 +564,16 @@ int main(void)
   			  "bt",
   			  128,
   			  NULL,
-  			  1,
+  			  2,
   			  NULL);
+
+  xTaskCreate(
+		  	  IR_task,
+			  "ir",
+			  128,
+			  NULL,
+			  1,
+			  NULL);
 
   vTaskStartScheduler();
   /* USER CODE END 2 */
