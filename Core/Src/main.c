@@ -54,6 +54,7 @@ I2C_HandleTypeDef hi2c1;
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 
+UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
@@ -67,6 +68,7 @@ static void MX_I2C1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART3_UART_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -145,10 +147,11 @@ void bt_set_fan_state(SystemState_t *sys, uint8_t enable, uint16_t pwm, enum Mod
 	}
 
 BT_CMD_MODE(on, 1, SPEED_LOW, MODE_MANUAL)
-BT_CMD_MODE(off, 0, SPEED_LOW, MODE_AUTO)
+BT_CMD_MODE(off, 0, SPEED_LOW, MODE_MANUAL)
 BT_CMD_MODE(low, 1, SPEED_LOW, MODE_MANUAL)
 BT_CMD_MODE(mid, 1, SPEED_MID, MODE_MANUAL)
 BT_CMD_MODE(high, 1, SPEED_HIGH, MODE_MANUAL)
+BT_CMD_MODE(auto, 0, SPEED_HIGH, MODE_AUTO)
 
 void bt_handler_set_pwm(bt_cmd_context_t *bct) {
 	int pwm = bct->set_pwm;
@@ -163,7 +166,8 @@ static const bt_cmd_entry_t bt_cmd_table[] = {
 	{.cmd = "low", .bt_handler = bt_handler_low},
 	{.cmd = "mid", .bt_handler = bt_handler_mid},
 	{.cmd = "high", .bt_handler = bt_handler_high},
-	{.cmd = "pwm", .bt_handler = bt_handler_set_pwm}
+	{.cmd = "pwm", .bt_handler = bt_handler_set_pwm},
+	{.cmd = "auto", .bt_handler = bt_handler_auto}
 };
 
 
@@ -531,6 +535,7 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM1_Init();
   MX_USART3_UART_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   ssd1306_Init();
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3); //PB2 TIM2 CH3
@@ -782,6 +787,39 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 2 */
   HAL_TIM_MspPostInit(&htim2);
+
+}
+
+/**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART2_Init 0 */
+
+  /* USER CODE END USART2_Init 0 */
+
+  /* USER CODE BEGIN USART2_Init 1 */
+
+  /* USER CODE END USART2_Init 1 */
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART2_Init 2 */
+
+  /* USER CODE END USART2_Init 2 */
 
 }
 
