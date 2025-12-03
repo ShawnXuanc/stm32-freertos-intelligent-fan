@@ -31,7 +31,7 @@
 #include "state.h"
 #include "semphr.h"
 #include "string.h"
-
+#include "log_queue.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -86,6 +86,9 @@ static void MX_USART2_UART_Init(void);
 #define PERIOD_MS 2000u
 
 #define Q_SIZE 128
+
+
+
 
 typedef struct SystemState {
 	float temperature;
@@ -151,7 +154,7 @@ BT_CMD_MODE(off, 0, SPEED_LOW, MODE_MANUAL)
 BT_CMD_MODE(low, 1, SPEED_LOW, MODE_MANUAL)
 BT_CMD_MODE(mid, 1, SPEED_MID, MODE_MANUAL)
 BT_CMD_MODE(high, 1, SPEED_HIGH, MODE_MANUAL)
-BT_CMD_MODE(auto, 0, SPEED_HIGH, MODE_AUTO)
+BT_CMD_MODE(auto, 0, SPEED_LOW, MODE_AUTO)
 
 void bt_handler_set_pwm(bt_cmd_context_t *bct) {
 	int pwm = bct->set_pwm;
@@ -374,6 +377,10 @@ void change_fan_state_auto(uint8_t ir_, float temp, enum Mode mode, uint8_t *fan
 void FanControl_task(void *pvParameters) {
 	SystemState_t *sys = &sys_state;
 
+	uint8_t  last_enable = sys->fan_enable;
+	uint16_t last_pwm    = sys->fan_pwm;
+	enum Mode last_mode = sys->mode;
+
 	for (;;) {
 		uint8_t fan_enable;
 		uint16_t pwm;
@@ -401,7 +408,21 @@ void FanControl_task(void *pvParameters) {
 
 			fan_enable = sys->fan_enable;
 			pwm = sys->fan_pwm;
+			mode = sys->mode;
 			xSemaphoreGive(state_mutex);
+		}
+
+
+		if (fan_enable != last_enable || pwm != last_pwm || mode != last_mode) {
+
+			log_record(LOG_SRC_FAN, LOG_TYPE_INFO,
+					  "state changed: mode=%s en=%u pwm=%u",
+					  mode == MODE_AUTO ? "AUTO" : "MANUAL",
+					  fan_enable, pwm);
+
+			last_enable = fan_enable;
+			last_pwm = pwm;
+			last_mode = mode;
 		}
 
 
@@ -435,6 +456,8 @@ void bt_process_string(SystemState_t *sys, char *str) {
 		cur++;
 	}
 
+	log_record(LOG_SRC_BT, LOG_TYPE_INFO, "receive cmd =\"%s\"", str);
+
 	char *num = NULL;
 	cur = str;
 	while (*cur && *cur != ' ') {
@@ -465,14 +488,20 @@ void bt_process_string(SystemState_t *sys, char *str) {
 		 .set_temp = 0,
 	  };
 
+    int flag = 0;
 	for (int i = 0; i < BT_CMD_TABLE_SIZE; ++i) {
 		if (!strcmp(str, bt_cmd_table[i].cmd)) {
 			if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
 				bt_cmd_table[i].bt_handler(&bct);
 				xSemaphoreGive(state_mutex);
+				flag = 1;
 			}
 			break;
 		}
+	}
+
+	if (!flag) {
+		log_record(LOG_SRC_BT, LOG_TYPE_WARN, "unknown cmd=\"%s\"", str);
 	}
 }
 
@@ -500,6 +529,38 @@ void BtRecieve_task(void *pvParameters) {
 		}
 	}
 }
+
+void format_time(char *buf, uint32_t tick_ms) {
+    uint32_t ms = tick_ms % 1000;
+    uint32_t sec = (tick_ms / 1000) % 60;
+    uint32_t min = (tick_ms / 60000) % 60;
+    uint32_t hr = tick_ms / 3600000;
+
+    snprintf(buf, 16, "%02lu:%02lu:%02lu.%03lu", hr, min, sec, ms);
+}
+
+
+void Log_task(void *pvParameters)
+{
+    log_item_t item;
+    char time_buf[16];
+    for (;;) {
+        if (log_pop(&item)) {
+            format_time(time_buf, item.timestamp_ms);
+            char buf[80];
+            snprintf(buf, sizeof(buf),
+                     "[%s] SRC=%s TYPE=%s MSG=%s\r\n",
+                     time_buf,
+                     log_src_str(item.src),
+                     log_type_str(item.type),
+                     item.msg);
+            HAL_UART_Transmit(&huart2, (uint8_t *)buf, strlen(buf), 100);
+        }
+
+        vTaskDelay(100);
+    }
+}
+
 
 /* USER CODE END 0 */
 
@@ -540,9 +601,12 @@ int main(void)
   ssd1306_Init();
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3); //PB2 TIM2 CH3
   IR_Init();
+  log_init();
   btQueue = xQueueCreate(Q_SIZE, sizeof(uint8_t));
   state_mutex = xSemaphoreCreateMutex();
   HAL_UART_Receive_IT(&huart3,&rxData,1);
+  log_record(LOG_SRC_SYSTEM, LOG_TYPE_INFO,
+             "system boot: started");
   xTaskCreate(
  		      test,
  		      "test",
@@ -578,7 +642,7 @@ int main(void)
   xTaskCreate(
 		  	  BtRecieve_task,
   			  "bt",
-  			  128,
+  			  256,
   			  NULL,
   			  2,
   			  NULL);
@@ -590,6 +654,15 @@ int main(void)
 			  NULL,
 			  1,
 			  NULL);
+
+  xTaskCreate(
+          Log_task,
+          "log",
+          256,
+          NULL,
+          1,
+          NULL);
+
 
   vTaskStartScheduler();
   /* USER CODE END 2 */
