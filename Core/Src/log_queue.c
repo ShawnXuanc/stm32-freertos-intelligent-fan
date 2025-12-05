@@ -45,11 +45,6 @@ static inline int is_empty(void)
     return (log_q.head == log_q.tail);
 }
 
-static inline int is_full(void)
-{
-    size_t next = (log_q.head + 1) % LOG_BUF_SIZE;
-    return (next == log_q.tail);
-}
 
 void log_push(log_source_t src, log_type_t type, char *msg) {
 	if (xSemaphoreTake(log_q.mutex, 0) == pdTRUE) {

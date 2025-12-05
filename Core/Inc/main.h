@@ -70,6 +70,11 @@ void Error_Handler(void);
 #define led_blue_Pin GPIO_PIN_15
 #define led_blue_GPIO_Port GPIOD
 
+extern I2C_HandleTypeDef hi2c1;
+extern TIM_HandleTypeDef htim1;
+extern TIM_HandleTypeDef htim2;
+extern UART_HandleTypeDef huart2;
+extern UART_HandleTypeDef huart3;
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
