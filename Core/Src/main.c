@@ -29,9 +29,14 @@
 #include "task.h"
 #include "queue.h"
 #include "state.h"
-#include "semphr.h"
 #include "string.h"
 #include "log_queue.h"
+#include "fan_control.h"
+#include "bt.h"
+#include "dht11.h"
+#include "ir_sensor.h"
+#include "display_oled.h"
+#include "logging.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,10 +55,8 @@
 
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
-
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
-
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
 
@@ -75,491 +78,6 @@ static void MX_USART2_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-#define SPEED_LOW 800
-#define SPEED_MID 1450
-#define SPEED_HIGH 1999
-
-#define DHT11_PORT GPIOB
-// PB9
-#define DHT11_PIN GPIO_PIN_9
-#define PERIOD_MS 2000u
-
-#define Q_SIZE 128
-
-
-
-
-typedef struct SystemState {
-	float temperature;
-	uint8_t ir_state;
-	uint16_t fan_pwm;
-	uint8_t fan_enable;
-	enum Mode mode;
-	uint32_t last_update_ms;
-
-} SystemState_t;
-
-SystemState_t sys_state = {
-    .temperature = 0,
-	.ir_state = 0,
-	.fan_pwm = SPEED_LOW,
-	.fan_enable = 0,
-	.mode = MODE_AUTO,
-	.last_update_ms = 0
-};
-
-typedef struct {
-	SystemState_t *sys;
-	int set_pwm;
-	int set_temp;
-} bt_cmd_context_t ;
-
-typedef void (*bt_cmd_handler_t)(bt_cmd_context_t *bct);
-
-typedef struct {
-	char *cmd;
-	bt_cmd_handler_t bt_handler;
-} bt_cmd_entry_t;
-
-
-// include priority inheritance
-SemaphoreHandle_t state_mutex;
-
-#define BT_CMD_TABLE_SIZE (sizeof(bt_cmd_table) / sizeof(bt_cmd_table[0]))
-
-QueueHandle_t btQueue;
-
-// IR sensor
-volatile uint32_t *irReg  = (uint32_t *)0x40020010;
-// DHT11
-uint32_t pMillis, cMillis;
-// HC05
-uint8_t rxData;
-
-void bt_set_fan_state(SystemState_t *sys, uint8_t enable, uint16_t pwm, enum Mode mode)
-{
-	sys->fan_enable = enable;
-	sys->fan_pwm    = pwm;
-	sys->mode       = mode;
-}
-
-#define BT_CMD_MODE(name, enable, pwm, mode) \
-	void bt_handler_##name(bt_cmd_context_t *bct) { \
-	    bt_set_fan_state(bct->sys, enable, pwm, mode); \
-	}
-
-BT_CMD_MODE(on, 1, SPEED_LOW, MODE_MANUAL)
-BT_CMD_MODE(off, 0, SPEED_LOW, MODE_MANUAL)
-BT_CMD_MODE(low, 1, SPEED_LOW, MODE_MANUAL)
-BT_CMD_MODE(mid, 1, SPEED_MID, MODE_MANUAL)
-BT_CMD_MODE(high, 1, SPEED_HIGH, MODE_MANUAL)
-BT_CMD_MODE(auto, 0, SPEED_LOW, MODE_AUTO)
-
-void bt_handler_set_pwm(bt_cmd_context_t *bct) {
-	int pwm = bct->set_pwm;
-	if (pwm < 0 || pwm > 2000)
-	    pwm = 0;
-	bt_set_fan_state(bct->sys, 1, pwm, MODE_MANUAL);
-}
-
-static const bt_cmd_entry_t bt_cmd_table[] = {
-	{.cmd = "on", .bt_handler = bt_handler_on},
-	{.cmd = "off", .bt_handler = bt_handler_off},
-	{.cmd = "low", .bt_handler = bt_handler_low},
-	{.cmd = "mid", .bt_handler = bt_handler_mid},
-	{.cmd = "high", .bt_handler = bt_handler_high},
-	{.cmd = "pwm", .bt_handler = bt_handler_set_pwm},
-	{.cmd = "auto", .bt_handler = bt_handler_auto}
-};
-
-
-void microDelay(uint16_t delay) {
-  __HAL_TIM_SET_COUNTER(&htim1, 0);
-  while (__HAL_TIM_GET_COUNTER(&htim1) < delay)
-    ;
-}
-
-uint8_t DHT11_Start(void) {
-  uint8_t Response = 0;
-  GPIO_InitTypeDef GPIO_InitStructPrivate = {0};
-  GPIO_InitStructPrivate.Pin = DHT11_PIN;
-  GPIO_InitStructPrivate.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStructPrivate.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStructPrivate.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(DHT11_PORT, &GPIO_InitStructPrivate); // set the pin as output
-  HAL_GPIO_WritePin(DHT11_PORT, DHT11_PIN, 0);        // pull the pin low
-  HAL_Delay(20);                                      // wait for 20ms
-  HAL_GPIO_WritePin(DHT11_PORT, DHT11_PIN, 1);        // pull the pin high
-  microDelay(30);                                     // wait for 30us
-  GPIO_InitStructPrivate.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStructPrivate.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(DHT11_PORT, &GPIO_InitStructPrivate); // set the pin as input
-  microDelay(40);
-  if (!(HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN))) {
-	  microDelay(80);
-	  if ((HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN)))
-      Response = 1;
-  }
-  pMillis = HAL_GetTick();
-  cMillis = HAL_GetTick();
-  while ((HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN)) && pMillis + 2 > cMillis) {
-    cMillis = HAL_GetTick();
-  }
-  return Response;
-}
-
-uint8_t DHT11_Read(void) {
-  uint8_t a = 0, b = 0;
-  for (a = 0; a < 8; a++) {
-    pMillis = HAL_GetTick();
-    cMillis = HAL_GetTick();
-
-    while (!(HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN)) &&
-           pMillis + 2 > cMillis) {
-      cMillis = HAL_GetTick();
-    }
-
-    microDelay(40);                                 // wait for 40 us
-    if (!(HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN))) // if the pin is low
-      b &= ~(1 << (7 - a));
-    else
-      b |= (1 << (7 - a));
-    pMillis = HAL_GetTick();
-    cMillis = HAL_GetTick();
-    while ((HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN)) &&
-           pMillis + 2 > cMillis) { // wait for the pin to go low
-      cMillis = HAL_GetTick();
-    }
-  }
-  return b;
-}
-
-int check_dht11(float *tCel) {
-	if (DHT11_Start()) {
-	      uint8_t RHI, RHD, TCI, TCD, SUM;
-	      RHI = DHT11_Read(); // Relative humidity integral
-	      RHD = DHT11_Read(); // Relative humidity decimal
-	      TCI = DHT11_Read(); // Celsius integral
-	      TCD = DHT11_Read(); // Celsius decimal
-	      SUM = DHT11_Read(); // Check sum
-	      if (RHI + RHD + TCI + TCD != SUM) {
-	    	  return 0;
-	      }
-	      // Can use RHI and TCI for any purposes if whole number only needed
-		  *tCel = (float)TCI + (float)(TCD / 10.0);
-		  return 1;
-	 }
-	 return 0;
-}
-
-void test(void *argument)
-{
-	HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15, GPIO_PIN_RESET);
-		for(;;){
-
-			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET );
-			vTaskDelay(500);
-			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET );
-			vTaskDelay(500);
-		}
-}
-
-
-void OLED_task(void *pvParameters) {
-    SystemState_t *sys = &sys_state;
-
-    float prev_temp = 0.0f;
-	uint16_t prev_pwm = SPEED_LOW;
-	enum Mode prev_mode = MODE_AUTO;
-
-	for (;;) {
-		//  Non-blocking take. If mutex is busy, keep using previous cached values.
-		if (xSemaphoreTake(state_mutex, 0) == pdTRUE) {
-			prev_temp = sys->temperature;
-			prev_pwm = sys->fan_pwm;
-			prev_mode = sys->mode;
-			xSemaphoreGive(state_mutex);
-		}
-		char temp_str[20];
-		sprintf(temp_str, "%.2f", prev_temp);
-		ssd1306_print(prev_pwm, temp_str, prev_mode);
-		vTaskDelay(100);
-	}
-}
-
-
-void DHT11_task(void *pvParameters) {
-	SystemState_t *sys = &sys_state;
-
-	HAL_TIM_Base_Start(&htim1);
-
-	TickType_t lastWakeTime = xTaskGetTickCount();
-	const TickType_t period = pdMS_TO_TICKS(PERIOD_MS);
-
-	for (;;) {
-
-		float temp;
-		if (check_dht11(&temp)) {
-			if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
-				sys->temperature = temp;
-				sys->last_update_ms = HAL_GetTick();
-				xSemaphoreGive(state_mutex);
-			}
-		}
-		// period wake up
-		vTaskDelayUntil(&lastWakeTime, period);
-	}
-}
-
-void turn_on_PWM(uint16_t pwm) {
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 0);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, 1);
-	__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_3, pwm);
-}
-
-void turn_off_PWM() {
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, 0);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, 0);
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0);
-}
-
-
-void IR_Init() {
-	uint32_t *pClkCtrlReg     = (uint32_t *)0x40023830;
-	uint32_t *pPortAModeReg   = (uint32_t *)0x40020000;
-
-	//1. Enable the clock RCC AHB1_ENR FOR GPIOA
-	*pClkCtrlReg |=  (1);
-	//2. We need to set the GPIO A Mode to Input
-	*pPortAModeReg &= ~(3);
-
-}
-
-uint8_t ir_read_reg() {
-	return (*irReg & 1) == 0 ? 1 : 0;
-}
-
-
-void IR_task(void *pvParameters) {
-	SystemState_t *sys = &sys_state;
-
-	for (;;) {
-		uint8_t ir_ = ir_read_reg();
-		if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE){
-			sys->ir_state = ir_;
-			xSemaphoreGive(state_mutex);
-		}
-		vTaskDelay(100);
-	}
-
-}
-
-static uint16_t cal_pwm_by_temp(float temp)
-{
-    if (temp >= 30)  return SPEED_HIGH;
-    if (temp >= 28)  return SPEED_MID;
-    return SPEED_LOW;
-}
-
-void change_fan_state_auto(uint8_t ir_, float temp, enum Mode mode, uint8_t *fan_enable, uint16_t *pwm) {
-	if (mode != MODE_AUTO)
-		return ;
-
-	*fan_enable = ir_ ? 1 : 0;
-
-	if (!*fan_enable)
-		return ;
-
-	*pwm = cal_pwm_by_temp(temp);
-}
-
-void FanControl_task(void *pvParameters) {
-	SystemState_t *sys = &sys_state;
-
-	uint8_t  last_enable = sys->fan_enable;
-	uint16_t last_pwm    = sys->fan_pwm;
-	enum Mode last_mode = sys->mode;
-
-	for (;;) {
-		uint8_t fan_enable;
-		uint16_t pwm;
-		uint8_t ir_;
-		float temp;
-		enum Mode mode;
-		if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
-			ir_ = sys->ir_state;
-			temp = sys->temperature;
-			fan_enable = sys->fan_enable;
-			pwm = sys->fan_pwm;
-			mode = sys->mode;
-			xSemaphoreGive(state_mutex);
-		}
-
-		change_fan_state_auto(ir_, temp, mode, &fan_enable, &pwm);
-
-		if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
-			// Apply auto result only if mode is still AUTO,
-			// ensuring MANUAL updates take priority
-			if (sys->mode == MODE_AUTO) {
-				sys->fan_enable = fan_enable;
-				sys->fan_pwm = pwm;
-			}
-
-			fan_enable = sys->fan_enable;
-			pwm = sys->fan_pwm;
-			mode = sys->mode;
-			xSemaphoreGive(state_mutex);
-		}
-
-
-		if (fan_enable != last_enable || pwm != last_pwm || mode != last_mode) {
-
-			log_record(LOG_SRC_FAN, LOG_TYPE_INFO,
-					  "state changed: mode=%s en=%u pwm=%u",
-					  mode == MODE_AUTO ? "AUTO" : "MANUAL",
-					  fan_enable, pwm);
-
-			last_enable = fan_enable;
-			last_pwm = pwm;
-			last_mode = mode;
-		}
-
-
-		if (fan_enable) {
-			turn_on_PWM(pwm);
-		} else {
-			turn_off_PWM();
-		}
-
-		vTaskDelay(100);
-	}
-}
-
-int s_to_int(char *str) {
-	int num = 0;
-	while (*str) {
-		if (*str < '0' || *str > '9')
-			return -1;
-		num = num * 10  + (*str - '0');
-		str++;
-	}
-	return num;
-}
-
-void bt_process_string(SystemState_t *sys, char *str) {
-	char *cur = str;
-	while (*cur) {
-		if (*cur >= 'A' && *cur <= 'Z') {
-			*cur = (*cur - 'A' + 'a');
-		}
-		cur++;
-	}
-
-	log_record(LOG_SRC_BT, LOG_TYPE_INFO, "receive cmd =\"%s\"", str);
-
-	char *num = NULL;
-	cur = str;
-	while (*cur && *cur != ' ') {
-		cur++;
-	}
-
-	if (*cur  == ' ') {
-		*cur = '\0';
-		cur++;
-		while (*cur == ' ') {
-			cur++;
-		}
-		if (*cur != '\0')
-			num = cur;
-	}
-
-	int pwm_ = 0;
-	if (num != NULL) {
-		int tmp = s_to_int(num);
-		if (tmp > 0)
-			pwm_ = tmp;
-	}
-
-
-	 bt_cmd_context_t bct = {
-	     .sys      = sys,
-		 .set_pwm  = pwm_,
-		 .set_temp = 0,
-	  };
-
-    int flag = 0;
-	for (int i = 0; i < BT_CMD_TABLE_SIZE; ++i) {
-		if (!strcmp(str, bt_cmd_table[i].cmd)) {
-			if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
-				bt_cmd_table[i].bt_handler(&bct);
-				xSemaphoreGive(state_mutex);
-				flag = 1;
-			}
-			break;
-		}
-	}
-
-	if (!flag) {
-		log_record(LOG_SRC_BT, LOG_TYPE_WARN, "unknown cmd=\"%s\"", str);
-	}
-}
-
-void BtRecieve_task(void *pvParameters) {
-	SystemState_t *sys = &sys_state;
-	char str[20];
-	int cur = 0;
-	for (;;) {
-		// Block until the data is received in the　queue
-		char cmd;
-		if (xQueueReceive(btQueue, &cmd, portMAX_DELAY) == pdPASS) {
-			if (cmd == '\r')
-				continue;
-			if (cmd == '\n') {
-				str[cur] = '\0';
-				bt_process_string(sys, str);
-				cur = 0;
-			} else {
-				if (cur >= sizeof(str) - 1) {
-					cur = 0;
-					continue;
-				}
-				str[cur++] = cmd;
-			}
-		}
-	}
-}
-
-void format_time(char *buf, uint32_t tick_ms) {
-    uint32_t ms = tick_ms % 1000;
-    uint32_t sec = (tick_ms / 1000) % 60;
-    uint32_t min = (tick_ms / 60000) % 60;
-    uint32_t hr = tick_ms / 3600000;
-
-    snprintf(buf, 16, "%02lu:%02lu:%02lu.%03lu", hr, min, sec, ms);
-}
-
-
-void Log_task(void *pvParameters)
-{
-    log_item_t item;
-    char time_buf[16];
-    for (;;) {
-        if (log_pop(&item)) {
-            format_time(time_buf, item.timestamp_ms);
-            char buf[80];
-            snprintf(buf, sizeof(buf),
-                     "[%s] SRC=%s TYPE=%s MSG=%s\r\n",
-                     time_buf,
-                     log_src_str(item.src),
-                     log_type_str(item.type),
-                     item.msg);
-            HAL_UART_Transmit(&huart2, (uint8_t *)buf, strlen(buf), 100);
-        }
-
-        vTaskDelay(100);
-    }
-}
 
 
 /* USER CODE END 0 */
@@ -600,20 +118,13 @@ int main(void)
   /* USER CODE BEGIN 2 */
   ssd1306_Init();
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3); //PB2 TIM2 CH3
-  IR_Init();
+  // init
+  ir_init();
   log_init();
-  btQueue = xQueueCreate(Q_SIZE, sizeof(uint8_t));
-  state_mutex = xSemaphoreCreateMutex();
-  HAL_UART_Receive_IT(&huart3,&rxData,1);
+  state_init();
+  bt_init();
   log_record(LOG_SRC_SYSTEM, LOG_TYPE_INFO,
              "system boot: started");
-  xTaskCreate(
- 		      test,
- 		      "test",
- 			  128,
- 			  NULL,
- 			  1,
- 			  NULL);
 
   xTaskCreate(
 			  FanControl_task,
@@ -640,7 +151,7 @@ int main(void)
   			  NULL);
 
   xTaskCreate(
-		  	  BtRecieve_task,
+		  	  BtReceive_task,
   			  "bt",
   			  256,
   			  NULL,
@@ -992,16 +503,7 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart->Instance == USART3) {
-		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-		uint8_t c = rxData;
-		xQueueSendFromISR(btQueue, &c, &xHigherPriorityTaskWoken);
-
-		// Restart the UART receive interrupt
-		HAL_UART_Receive_IT(&huart3, &rxData, 1);
-
-		// If a higher priority task was unblocked by xQueueSendFromISR
-		// request an immediate context switch before exiting the ISR
-		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+		bt_uart_from_isr();
 
 	}
 }
