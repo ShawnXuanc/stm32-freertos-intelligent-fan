@@ -9,8 +9,9 @@
 
 SystemState_t sys_state = {
     .temperature    = 0,
+	.humidity       = 0,
     .ir_state       = 0,
-    .fan_pwm        = 800,
+    .fan_pwm        = SPEED_LOW,
     .fan_enable     = 0,
     .mode           = MODE_AUTO,
     .last_update_ms = 0

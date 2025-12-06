@@ -216,7 +216,7 @@ void ssd1306_TestFonts3() {
 
 
 
-void ssd1306_print(int num, char *temp_str, enum Mode m)
+void ssd1306_print(int num, char *temp_str, char *humid_str, enum Mode m)
 {
 	const char *speed_str;
 	if (num < 1000)
@@ -230,7 +230,6 @@ void ssd1306_print(int num, char *temp_str, enum Mode m)
 
 	ssd1306_Fill(Black);
 	ssd1306_SetCursor(4, 4);
-	// ssd1306_WriteString("PHlab embedded proj", Font_6x8, White);
 	ssd1306_WriteString("System Mode: ", Font_6x8, White);
 	ssd1306_WriteString(mode_str, Font_6x8, White);
 	ssd1306_SetCursor(4, 14);
@@ -240,6 +239,9 @@ void ssd1306_print(int num, char *temp_str, enum Mode m)
 	ssd1306_SetCursor(4, 34);
 	ssd1306_WriteString("temperature: ", Font_6x8, White);
 	ssd1306_WriteString(temp_str, Font_6x8, White);
+	ssd1306_SetCursor(4, 44);
+	ssd1306_WriteString("humidity: ", Font_6x8, White);
+	ssd1306_WriteString(humid_str, Font_6x8, White);
 
 	ssd1306_UpdateScreen();
 }

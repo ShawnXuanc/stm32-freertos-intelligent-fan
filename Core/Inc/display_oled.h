@@ -11,6 +11,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-void OLED_task(void *pvParameters);
+void OLED_task(void *);
 
 #endif /* INC_DISPLAY_OLED_H_ */

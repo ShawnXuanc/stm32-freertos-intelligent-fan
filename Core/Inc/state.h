@@ -19,6 +19,7 @@ enum Mode {
 
 typedef struct SystemState {
 	float temperature;
+	float humidity;
 	uint8_t ir_state;
 	uint16_t fan_pwm;
 	uint8_t fan_enable;
@@ -37,5 +38,5 @@ extern SystemState_t sys_state;
 // include priority inheritance
 extern SemaphoreHandle_t state_mutex;
 
-void state_init(void);
+void state_init();
 #endif /* INC_STATE_H_ */
