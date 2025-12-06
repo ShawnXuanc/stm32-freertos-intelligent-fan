@@ -78,7 +78,7 @@ uint8_t DHT11_Read(void) {
   return b;
 }
 
-int check_dht11(float *tCel) {
+int check_dht11(float *temp, float *humidity) {
 	if (DHT11_Start()) {
 	      uint8_t RHI, RHD, TCI, TCD, SUM;
 	      RHI = DHT11_Read(); // Relative humidity integral
@@ -90,7 +90,9 @@ int check_dht11(float *tCel) {
 	    	  return 0;
 	      }
 	      // Can use RHI and TCI for any purposes if whole number only needed
-		  *tCel = (float)TCI + (float)(TCD / 10.0);
+		  *temp = (float)TCI + (float)(TCD / 10.0);
+		  *humidity = (float)RHI;
+
 		  return 1;
 	 }
 	 return 0;
@@ -107,10 +109,11 @@ void DHT11_task(void *pvParameters) {
 
 	for (;;) {
 
-		float temp;
-		if (check_dht11(&temp)) {
+		float temp, humidity;
+		if (check_dht11(&temp, &humidity)) {
 			if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
 				sys->temperature = temp;
+				sys->humidity = humidity;
 				sys->last_update_ms = HAL_GetTick();
 				xSemaphoreGive(state_mutex);
 			}
