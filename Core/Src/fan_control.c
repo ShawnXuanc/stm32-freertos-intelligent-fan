@@ -120,6 +120,14 @@ static void change_fan_state_auto(SystemState_t *s)
     s->fan_pwm = cal_pwm_fuzzy(s->temperature, s->humidity);
 }
 
+
+uint16_t pwm_stabilize(uint16_t prev, uint16_t next) {
+	int diff = (int)next - (int)prev;
+	if (diff < 0)
+		diff = -diff;
+	return diff >= PWM_UPDATE_THRESHOLD ? next : prev;
+}
+
 void FanControl_task(void *pvParameters) {
 	SystemState_t *sys = &sys_state;
 
@@ -129,13 +137,15 @@ void FanControl_task(void *pvParameters) {
 
 	for (;;) {
 		SystemState_t local_sys;
-
 		if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
 			local_sys = *sys;
 			xSemaphoreGive(state_mutex);
 		}
 
+		uint16_t prev_pwm = local_sys.fan_pwm;
+
 		change_fan_state_auto(&local_sys);
+		local_sys.fan_pwm = pwm_stabilize(prev_pwm, local_sys.fan_pwm);
 
 		if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
 			// Apply auto result only if mode is still AUTO,

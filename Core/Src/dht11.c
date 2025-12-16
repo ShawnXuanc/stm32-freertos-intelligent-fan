@@ -98,6 +98,20 @@ int check_dht11(float *temp, float *humidity) {
 	 return 0;
 }
 
+void ema_init(ema_filter_t *f, float alpha) {
+	f->alpha = alpha;
+	f->value = 0;
+	f->inited = 0;
+}
+
+void ema_update(ema_filter_t *f, float sample) {
+	if (!f->inited) {
+		f->value = sample;
+		f->inited = 1;
+		return;
+	}
+	f->value = f->alpha * sample + (1 - f->alpha) * f->value;
+}
 
 void DHT11_task(void *pvParameters) {
 	SystemState_t *sys = &sys_state;
@@ -107,13 +121,23 @@ void DHT11_task(void *pvParameters) {
 	TickType_t lastWakeTime = xTaskGetTickCount();
 	const TickType_t period = pdMS_TO_TICKS(PERIOD_MS);
 
+	ema_filter_t temp_filter;
+	ema_filter_t humi_filter;
+
+	ema_init(&temp_filter, ALPHA);
+	ema_init(&humi_filter, ALPHA);
+
 	for (;;) {
 
 		float temp, humidity;
 		if (check_dht11(&temp, &humidity)) {
+
+			ema_update(&temp_filter, temp);
+			ema_update(&humi_filter, humidity);
+
 			if (xSemaphoreTake(state_mutex, portMAX_DELAY) == pdTRUE) {
-				sys->temperature = temp;
-				sys->humidity = humidity;
+				sys->temperature = temp_filter.value;
+				sys->humidity = humi_filter.value;
 				sys->last_update_ms = HAL_GetTick();
 				xSemaphoreGive(state_mutex);
 			}
