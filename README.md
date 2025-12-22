@@ -41,6 +41,12 @@ The firmware is structured as **independent FreeRTOS tasks**, communicating via 
 - Suppresses insignificant PWM changes
 - Reduces unnecessary PWM updates
 
+### Interrupt-Driven Communication (ISR → Task Wake-up)
+- UART RX handled via interrupt, with received bytes sent to a FreeRTOS queue from ISR
+- A dedicated task receives data from the queue and processes incoming data upon ISR delivery
+- Eliminates busy-wait polling and improves system responsiveness
+
+
 ---
 
 ##  Hardware & Peripherals
