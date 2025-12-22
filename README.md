@@ -48,7 +48,7 @@ The firmware is structured as **independent FreeRTOS tasks**, communicating via 
 | Component | Interface | Description |
 |--------|----------|-------------|
 | STM32F407 | Cortex-M4 | Main MCU |
-| DHT11 | GPIO + Timer | Temperature & Humidity Sensor |
+| DHT11 | GPIO | Temperature & Humidity Sensor (timing-sensitive single-wire protocol) |
 | IR Sensor | GPIO | Proximity Detection |
 | Fan + L298N | PWM (TIM2) | Fan Speed Control |
 | HC-05 Bluetooth | UART | Remote Command Input |
